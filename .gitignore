@@ -1,0 +1,32 @@
+# Game data and native runtime
+*.apk
+*.dex
+*.rpm
+/launcher/rpm-source/runtime/
+
+# Generated sources and build products
+/launcher/rpm-source/native/
+/launcher/rpm-source/main.cpp
+/launcher/rpm-source/Launcher.qml
+/launcher/build/
+/launcher/build-rpm/
+/launcher/builtin-source/
+/launcher/build-builtin-rpm/
+/launcher/.builtin-runtime-*/
+*.o
+*.a
+*.so
+*.so.*
+*.log
+*.pro.user*
+__pycache__/
+*.pyc
+
+# Signing keys and credentials
+tokens/
+*.token
+*.pem
+*.key
+*.cert
+.env
+.env.*

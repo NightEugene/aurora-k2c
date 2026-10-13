@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Kingdom
+Name[ru]=Kingdom
+Icon=k2c
+Exec=/usr/bin/invoker --type=qt5 /home/defaultuser/k2c/launcher/k2c-launcher
+Terminal=false
+Categories=Game;
+X-Nemo-Application-Type=silica-qt5
+
+[X-Application]
+OrganizationName=ru.kingdom2crowns
+ApplicationName=k2c
+
+[X-Sailjail]
+Sandboxing=Disabled

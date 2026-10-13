@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+X-Nemo-Application-Type=silica-qt5
+Name=Kingdom
+Name[ru]=Kingdom
+Icon=ru.nighteugene.k2clauncher
+Exec=/usr/bin/ru.nighteugene.k2clauncher
+Terminal=false
+Categories=Game;
+
+[X-Application]
+Permissions=UserDirs;Downloads;RemovableMedia;Audio;
+OrganizationName=ru.nighteugene
+ApplicationName=k2clauncher
+ExecDBus=/usr/bin/ru.nighteugene.k2clauncher
