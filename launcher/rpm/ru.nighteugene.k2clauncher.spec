@@ -1,6 +1,6 @@
 Name: ru.nighteugene.k2clauncher
 Summary: APK launcher for Kingdom: Two Crowns on Aurora OS
-Version: 1.1.1
+Version: 1.1.2
 Release: 1
 AutoReqProv: no
 License: MIT

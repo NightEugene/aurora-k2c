@@ -286,12 +286,15 @@ static void *unity_worker_run(void *arg)
                 clock_gettime(CLOCK_MONOTONIC, &now);
                 jlong ms = (jlong)now.tv_sec * 1000 + now.tv_nsec / 1000000;
                 if (event.action == 0) down_ms = ms;
-                jobject motion = fake_jni_new_motion_event(event.action, event.x, event.y, ms, down_ms);
+                jobject motion = fake_jni_new_motion_event(&event, ms, down_ms);
                 jboolean accepted = inject(env, unityPlayer, motion);
                 fake_jni_release_motion_event(motion);
-                if (event.action != 2)
-                    fprintf(stderr, "[input] action=%d x=%.1f y=%.1f accepted=%d\n",
-                            event.action, event.x, event.y, accepted);
+                if (event.action != 2) {
+                    int i = event.index >= 0 && event.index < event.count ? event.index : 0;
+                    fprintf(stderr, "[input] action=%d index=%d count=%d x=%.1f y=%.1f accepted=%d\n",
+                            event.action, event.index, event.count, event.x[i], event.y[i], accepted);
+                }
+                if (event.action == 1 || event.action == 3) down_ms = 0;
             }
             jboolean r = render(env, unityPlayer);
             if (!r) { fprintf(stderr, "[m3] nativeRender вернул false на кадре %lu\n", i); break; }

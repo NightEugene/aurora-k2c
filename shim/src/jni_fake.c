@@ -31,7 +31,7 @@ typedef struct FakeRef {
     struct FakeRef *next_motion;
 } FakeRef;
 
-typedef struct { int action; float x, y; jlong time_ms, down_ms; } FakeMotion;
+typedef struct { K2CMotionPoints p; jlong time_ms, down_ms; } FakeMotion;
 static FakeRef *g_motion_refs[64];
 static pthread_mutex_t g_motion_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -66,11 +66,13 @@ static jobject game_file(const char *leaf)
     return fake_new(TAG_OBJECT,name,NULL);
 }
 
-jobject fake_jni_new_motion_event(int action, float x, float y, jlong time_ms, jlong down_ms)
+jobject fake_jni_new_motion_event(const K2CMotionPoints *points, jlong time_ms, jlong down_ms)
 {
     FakeRef *r = fake_new(TAG_OBJECT, "android/view/MotionEvent", NULL);
     FakeMotion *motion = malloc(sizeof *motion);
-    *motion = (FakeMotion){ action, x, y, time_ms, down_ms };
+    motion->p = *points;
+    motion->time_ms = time_ms;
+    motion->down_ms = down_ms;
     r->data = motion;
     pthread_mutex_lock(&g_motion_mutex);
     unsigned bucket = motion_bucket(r);
@@ -769,16 +771,25 @@ static jobject framework_call_object(JNIEnv env, void *target, FakeRef *m, jvalu
 
 static jint framework_call_int(JNIEnv env, void *target, FakeRef *m, jvalue *args)
 {
-    (void)env; (void)args;
+    (void)env;
     const char *meth = m ? m->name : "?";
     const char *tname = ref_name(target);
     FakeMotion *motion = motion_data(target);
     if (motion) {
-        if (strcmp(meth, "getAction") == 0 || strcmp(meth, "getActionMasked") == 0) return motion->action;
-        if (strcmp(meth, "getPointerCount") == 0) return 1;
+        K2CMotionPoints *p = &motion->p;
+        int arg0 = args ? args[0].i : 0;
+        if (strcmp(meth, "getAction") == 0) return p->action | (p->index << 8);
+        if (strcmp(meth, "getActionMasked") == 0) return p->action & 0xff;
+        if (strcmp(meth, "getActionIndex") == 0) return p->index;
+        if (strcmp(meth, "getPointerCount") == 0) return p->count;
+        if (strcmp(meth, "getPointerId") == 0) return arg0 >= 0 && arg0 < p->count ? p->id[arg0] : 0;
+        if (strcmp(meth, "findPointerIndex") == 0) {
+            for (int i = 0; i < p->count; i++) if (p->id[i] == arg0) return i;
+            return -1;
+        }
         if (strcmp(meth, "getSource") == 0) return 0x1002;
         if (strcmp(meth, "getToolType") == 0) return 1;
-        return 0; // pointer id/index, history, buttons, device id, meta state
+        return 0; // history, buttons, device id, meta state
     }
     if (strcmp(meth, "getDisplayId") == 0) return 0;
     if (strcmp(meth, "getRotation") == 0) return 0;
@@ -976,7 +987,7 @@ static jobject call_static_object_common(JNIEnv env, jclass cls, jmethodID mid, 
     if (g_verbose) fprintf(stderr, "[jni-call] static %s.%s %s\n", ref_name(cls), meth, m && m->sig ? m->sig : "");
     if (strcmp(meth, "obtain") == 0 && args && motion_data(args[0].l)) {
         FakeMotion *src = motion_data(args[0].l);
-        return fake_jni_new_motion_event(src->action, src->x, src->y, src->time_ms, src->down_ms);
+        return fake_jni_new_motion_event(&src->p, src->time_ms, src->down_ms);
     }
     // Class.forName("a.b.C") → фейковый jclass
     if (strcmp(meth, "forName") == 0 && args) {
@@ -1106,15 +1117,20 @@ static void impl_CallStaticVoidMethodA(JNIEnv env, jclass cls, jmethodID mid, co
 }
 
 // float/double/byte/short/char — лог + дефолт
-static jfloat call_float_common(JNIEnv env, void *target, jmethodID mid)
+static jfloat call_float_common(JNIEnv env, void *target, jmethodID mid, jvalue *args)
 {
     CALL_PROLOG();
     const char *meth2 = m && m->name ? m->name : "?";
     FakeMotion *motion = motion_data(target);
     if (motion) {
-        if (strcmp(meth2, "getX") == 0 || strcmp(meth2, "getRawX") == 0) return motion->x;
-        if (strcmp(meth2, "getY") == 0 || strcmp(meth2, "getRawY") == 0) return motion->y;
-        if (strcmp(meth2, "getPressure") == 0) return motion->action == 1 || motion->action == 3 ? 0.f : 1.f;
+        K2CMotionPoints *p = &motion->p;
+        // Без индекса Android возвращает координаты изменившегося контакта
+        // для POINTER_DOWN/UP и основного (0) для остальных действий.
+        int idx = args ? args[0].i : ((p->action == 5 || p->action == 6) ? p->index : 0);
+        if (idx < 0 || idx >= p->count) idx = 0;
+        if (strcmp(meth2, "getX") == 0 || strcmp(meth2, "getRawX") == 0) return p->x[idx];
+        if (strcmp(meth2, "getY") == 0 || strcmp(meth2, "getRawY") == 0) return p->y[idx];
+        if (strcmp(meth2, "getPressure") == 0) return p->action == 1 || p->action == 3 ? 0.f : 1.f;
         if (strcmp(meth2, "getSize") == 0 || strcmp(meth2, "getXPrecision") == 0 ||
             strcmp(meth2, "getYPrecision") == 0 || strcmp(meth2, "getTouchMajor") == 0 ||
             strcmp(meth2, "getTouchMinor") == 0) return 1.f;
@@ -1124,11 +1140,19 @@ static jfloat call_float_common(JNIEnv env, void *target, jmethodID mid)
     (void)env;
     return 0.f;
 }
-static jfloat impl_CallFloatMethod(JNIEnv env, jobject target, jmethodID mid, ...) { return call_float_common(env, target, mid); }
-static jfloat impl_CallFloatMethodV(JNIEnv env, jobject target, jmethodID mid, va_list ap) { (void)ap; return call_float_common(env, target, mid); }
-static jfloat impl_CallFloatMethodA(JNIEnv env, jobject target, jmethodID mid, const jvalue *args) { (void)args; return call_float_common(env, target, mid); }
-static jdouble impl_CallDoubleMethodV(JNIEnv env, jobject target, jmethodID mid, va_list ap) { (void)ap; return call_float_common(env, target, mid); }
-static jdouble impl_CallDoubleMethodA(JNIEnv env, jobject target, jmethodID mid, const jvalue *args) { (void)args; return call_float_common(env, target, mid); }
+static jfloat impl_CallFloatMethod(JNIEnv env, jobject target, jmethodID mid, ...)
+{
+    va_list ap; va_start(ap, mid); jvalue a[1]; a[0].l = va_arg(ap, jobject); va_end(ap);
+    return call_float_common(env, target, mid, a);
+}
+static jfloat impl_CallFloatMethodV(JNIEnv env, jobject target, jmethodID mid, va_list ap)
+{ jvalue a[1]; a[0].l = va_arg(ap, jobject); return call_float_common(env, target, mid, a); }
+static jfloat impl_CallFloatMethodA(JNIEnv env, jobject target, jmethodID mid, const jvalue *args)
+{ return call_float_common(env, target, mid, (jvalue *)args); }
+static jdouble impl_CallDoubleMethodV(JNIEnv env, jobject target, jmethodID mid, va_list ap)
+{ jvalue a[1]; a[0].l = va_arg(ap, jobject); return call_float_common(env, target, mid, a); }
+static jdouble impl_CallDoubleMethodA(JNIEnv env, jobject target, jmethodID mid, const jvalue *args)
+{ return call_float_common(env, target, mid, (jvalue *)args); }
 static jdouble impl_CallDoubleMethod(JNIEnv env, jobject target, jmethodID mid, ...) { CALL_PROLOG(); return 0.0; }
 static jbyte impl_CallByteMethod(JNIEnv env, jobject target, jmethodID mid, ...) { CALL_PROLOG(); return 0; }
 static jshort impl_CallShortMethod(JNIEnv env, jobject target, jmethodID mid, ...) { CALL_PROLOG(); return 0; }

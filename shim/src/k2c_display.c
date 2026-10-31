@@ -51,8 +51,7 @@ static void (*g_qt_surface_listener[])(void) = {
 static struct wl_seat *g_seat;
 static struct wl_touch *g_touch;
 static struct wl_pointer *g_pointer;
-static int32_t g_touch_id = -1;
-static float g_touch_x, g_touch_y, g_pointer_x, g_pointer_y;
+static float g_pointer_x, g_pointer_y;
 static int g_pointer_pressed;
 
 #define INPUT_CAPACITY 128
@@ -73,29 +72,77 @@ void k2c_display_set_host(int width, int height, K2CFrameSink sink, void *contex
     pthread_mutex_unlock(&g_host_mutex);
 }
 
-static void queue_touch(int action, float x, float y)
+// Aurora's shm input follows the portrait buffer coordinates. Undo the
+// clockwise pixel rotation used when presenting our landscape image.
+static void normalize_point(float *x, float *y)
 {
+    if (g_output_portrait) {
+        float nx = *y / g_w;
+        *y = 1.f - *x / g_h;
+        *x = nx;
+    } else {
+        *x /= g_w;
+        *y /= g_h;
+    }
+}
+
+// Координаты указателей — пиксели; нормализуются здесь.
+static void queue_frame(K2CInput *frame)
+{
+    if (frame->count < 1) frame->count = 1;
+    if (frame->count > K2C_MOTION_MAX_POINTERS) frame->count = K2C_MOTION_MAX_POINTERS;
+    for (int i = 0; i < frame->count; i++) normalize_point(&frame->x[i], &frame->y[i]);
     pthread_mutex_lock(&g_input_mutex);
     unsigned next = (g_input_head + 1) % INPUT_CAPACITY;
     if (next == g_input_tail) {
-        if (action == 2) { pthread_mutex_unlock(&g_input_mutex); return; }
+        if (frame->action == 2) { pthread_mutex_unlock(&g_input_mutex); return; }
         // Never leave Unity with a stuck contact after queue overflow.
         g_input_head = g_input_tail = 0;
-        action = 3;
+        frame->action = 3;
+        frame->index = 0;
         next = 1;
     }
-    // Aurora's shm input follows the portrait buffer coordinates. Undo the
-    // clockwise pixel rotation used when presenting our landscape image.
-    g_input[g_input_head] = g_output_portrait ?
-        (K2CInput){ action, y / g_w, 1.f - x / g_h } :
-        (K2CInput){ action, x / g_w, y / g_h };
+    g_input[g_input_head] = *frame;
     g_input_head = next;
     pthread_mutex_unlock(&g_input_mutex);
 }
 
+void k2c_display_host_input_frame(const K2CInput *frame)
+{
+    K2CInput copy = *frame;
+    for (int i = 0; i < copy.count && i < K2C_MOTION_MAX_POINTERS; i++) {
+        copy.x[i] *= g_w;
+        copy.y[i] *= g_h;
+    }
+    queue_frame(&copy);
+}
+
 void k2c_display_host_input(int action, float x, float y)
 {
-    queue_touch(action, x * g_w, y * g_h);
+    K2CInput frame = { action, 0, 1, { x }, { y }, { 0 } };
+    k2c_display_host_input_frame(&frame);
+}
+
+static struct { int32_t id; float x, y; } g_contacts[K2C_MOTION_MAX_POINTERS];
+static int g_contact_count;
+
+static void build_frame(K2CInput *frame, int action, int index)
+{
+    frame->action = action;
+    frame->index = index;
+    frame->count = g_contact_count;
+    for (int i = 0; i < g_contact_count; i++) {
+        frame->x[i] = g_contacts[i].x;
+        frame->y[i] = g_contacts[i].y;
+        frame->id[i] = i; // слот стабилен, пока палец на экране — как id указателя Android
+    }
+}
+
+static int find_contact(int32_t id)
+{
+    for (int i = 0; i < g_contact_count; i++)
+        if (g_contacts[i].id == id) return i;
+    return -1;
 }
 
 static void touch_down(void *data, struct wl_touch *touch, uint32_t serial,
@@ -103,38 +150,62 @@ static void touch_down(void *data, struct wl_touch *touch, uint32_t serial,
                        wl_fixed_t x, wl_fixed_t y)
 {
     (void)data; (void)touch; (void)serial; (void)time;
-    if (surface != g_surface || g_touch_id != -1) return;
-    g_touch_id = id;
-    g_touch_x = wl_fixed_to_double(x); g_touch_y = wl_fixed_to_double(y);
-    queue_touch(0, g_touch_x, g_touch_y);
+    if (surface != g_surface || find_contact(id) >= 0) return;
+    if (g_contact_count >= K2C_MOTION_MAX_POINTERS) return;
+    int index = g_contact_count++;
+    g_contacts[index].id = id;
+    g_contacts[index].x = wl_fixed_to_double(x);
+    g_contacts[index].y = wl_fixed_to_double(y);
+    K2CInput frame;
+    build_frame(&frame, index == 0 ? 0 : 5, index);
+    queue_frame(&frame);
 }
 static void touch_up(void *data, struct wl_touch *touch, uint32_t serial,
                      uint32_t time, int32_t id)
 {
     (void)data; (void)touch; (void)serial; (void)time;
-    if (id != g_touch_id) return;
-    queue_touch(1, g_touch_x, g_touch_y);
-    g_touch_id = -1;
+    int index = find_contact(id);
+    if (index < 0) return;
+    K2CInput frame;
+    // Снимок POINTER_UP содержит и поднятый контакт — как в Android.
+    build_frame(&frame, g_contact_count == 1 ? 1 : 6, index);
+    queue_frame(&frame);
+    for (int i = index; i + 1 < g_contact_count; i++) g_contacts[i] = g_contacts[i + 1];
+    g_contact_count--;
 }
 static void touch_motion(void *data, struct wl_touch *touch, uint32_t time,
                          int32_t id, wl_fixed_t x, wl_fixed_t y)
 {
     (void)data; (void)touch; (void)time;
-    if (id != g_touch_id) return;
-    g_touch_x = wl_fixed_to_double(x); g_touch_y = wl_fixed_to_double(y);
-    queue_touch(2, g_touch_x, g_touch_y);
+    int index = find_contact(id);
+    if (index < 0) return;
+    g_contacts[index].x = wl_fixed_to_double(x);
+    g_contacts[index].y = wl_fixed_to_double(y);
+    K2CInput frame;
+    build_frame(&frame, 2, 0);
+    queue_frame(&frame);
 }
 static void touch_frame(void *data, struct wl_touch *touch) { (void)data; (void)touch; }
 static void touch_cancel(void *data, struct wl_touch *touch)
 {
     (void)data; (void)touch;
-    if (g_touch_id != -1) queue_touch(3, g_touch_x, g_touch_y);
-    g_touch_id = -1;
+    if (g_contact_count > 0) {
+        K2CInput frame;
+        build_frame(&frame, 3, 0);
+        queue_frame(&frame);
+    }
+    g_contact_count = 0;
 }
 static const struct wl_touch_listener g_touch_listener = {
     .down = touch_down, .up = touch_up, .motion = touch_motion,
     .frame = touch_frame, .cancel = touch_cancel
 };
+
+static void pointer_frame(int action, float x, float y)
+{
+    K2CInput frame = { action, 0, 1, { x }, { y }, { 0 } };
+    queue_frame(&frame);
+}
 
 static void pointer_enter(void *data, struct wl_pointer *pointer, uint32_t serial,
                           struct wl_surface *surface, wl_fixed_t x, wl_fixed_t y)
@@ -146,7 +217,7 @@ static void pointer_leave(void *data, struct wl_pointer *pointer, uint32_t seria
                           struct wl_surface *surface)
 {
     (void)data; (void)pointer; (void)serial; (void)surface;
-    if (g_pointer_pressed) queue_touch(3, g_pointer_x, g_pointer_y);
+    if (g_pointer_pressed) pointer_frame(3, g_pointer_x, g_pointer_y);
     g_pointer_pressed = 0;
 }
 static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time,
@@ -154,7 +225,7 @@ static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time
 {
     (void)data; (void)pointer; (void)time;
     g_pointer_x = wl_fixed_to_double(x); g_pointer_y = wl_fixed_to_double(y);
-    if (g_pointer_pressed) queue_touch(2, g_pointer_x, g_pointer_y);
+    if (g_pointer_pressed) pointer_frame(2, g_pointer_x, g_pointer_y);
 }
 static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t serial,
                            uint32_t time, uint32_t button, uint32_t state)
@@ -162,7 +233,7 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
     (void)data; (void)pointer; (void)serial; (void)time;
     if (button != 0x110) return; // BTN_LEFT
     g_pointer_pressed = state == WL_POINTER_BUTTON_STATE_PRESSED;
-    queue_touch(g_pointer_pressed ? 0 : 1, g_pointer_x, g_pointer_y);
+    pointer_frame(g_pointer_pressed ? 0 : 1, g_pointer_x, g_pointer_y);
 }
 static void pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
                          uint32_t axis, wl_fixed_t value)
@@ -490,8 +561,10 @@ int k2c_display_take_input(K2CInput *event)
     pthread_mutex_unlock(&g_input_mutex);
     // MotionEvent coordinates are display pixels. Unity applies its own
     // render-resolution scale; using viewport pixels here scales input twice.
-    event->x *= g_w;
-    event->y *= g_h;
+    for (int i = 0; i < event->count && i < K2C_MOTION_MAX_POINTERS; i++) {
+        event->x[i] *= g_w;
+        event->y[i] *= g_h;
+    }
     return 1;
 }
 

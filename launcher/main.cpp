@@ -32,6 +32,7 @@
 #include <QScreen>
 #include <QTouchEvent>
 #include <QMouseEvent>
+#include <QVector>
 extern "C" {
 #include "native/k2c_display.h"
 }
@@ -184,10 +185,24 @@ class GameView : public QQuickItem {
     QMutex frameMutex;
     QImage frame;
     bool dirty = false;
-    int contact = -1;
+    struct TouchContact { int id; QPointF pos; };
+    QVector<TouchContact> contacts;
     QElapsedTimer clock;
     qint64 lastReport=0;
     unsigned long displayed=0,lastDisplayed=0;
+    void sendFrame(int action, int index, const QVector<TouchContact> &snapshot) {
+        if(width()<=0 || height()<=0 || snapshot.isEmpty())return;
+        K2CInput frame = {};
+        frame.action = action;
+        frame.index = index;
+        frame.count = qMin(snapshot.size(), K2C_MOTION_MAX_POINTERS);
+        for(int i=0;i<frame.count;++i) {
+            frame.x[i] = float(snapshot[i].pos.x()/width());
+            frame.y[i] = float(snapshot[i].pos.y()/height());
+            frame.id[i] = i;
+        }
+        k2c_display_host_input_frame(&frame);
+    }
     void sendInput(int action, const QPointF &point) {
         if(width()>0 && height()>0)
             k2c_display_host_input(action, point.x()/width(), point.y()/height());
@@ -248,24 +263,38 @@ protected:
     }
     void touchEvent(QTouchEvent *event) override {
         if(event->type()==QEvent::TouchCancel) {
-            if(contact>=0)k2c_display_host_input(3,0,0);
-            contact=-1; event->accept(); return;
+            if(!contacts.isEmpty())sendFrame(3,0,contacts);
+            contacts.clear(); event->accept(); return;
         }
+        bool moved=false;
         for(const QTouchEvent::TouchPoint &point:event->touchPoints()) {
-            if(contact<0 && point.state()==Qt::TouchPointPressed) {
-                contact=point.id(); sendInput(0,point.pos());
-            } else if(point.id()==contact) {
-                if(point.state()==Qt::TouchPointReleased) { sendInput(1,point.pos()); contact=-1; }
-                else if(point.state()==Qt::TouchPointMoved)sendInput(2,point.pos());
+            int at=-1;
+            for(int i=0;i<contacts.size();++i)
+                if(contacts[i].id==point.id()) { at=i; break; }
+            if(point.state()==Qt::TouchPointPressed && at<0) {
+                if(contacts.size()>=K2C_MOTION_MAX_POINTERS)continue;
+                contacts.append({point.id(),point.pos()});
+                sendFrame(contacts.size()==1 ? 0 : 5, contacts.size()-1, contacts);
+            } else if(at>=0) {
+                if(point.state()==Qt::TouchPointReleased) {
+                    // Снимок POINTER_UP содержит и поднятый контакт — как в Android.
+                    QVector<TouchContact> snapshot=contacts;
+                    sendFrame(snapshot.size()==1 ? 1 : 6, at, snapshot);
+                    contacts.remove(at);
+                } else if(point.state()==Qt::TouchPointMoved) {
+                    contacts[at].pos=point.pos();
+                    moved=true;
+                }
             }
         }
+        if(moved && !contacts.isEmpty())sendFrame(2,0,contacts);
         event->accept();
     }
     void mousePressEvent(QMouseEvent *event) override { sendInput(0,event->localPos());event->accept(); }
     void mouseMoveEvent(QMouseEvent *event) override { sendInput(2,event->localPos());event->accept(); }
     void mouseReleaseEvent(QMouseEvent *event) override { sendInput(1,event->localPos());event->accept(); }
-    void touchUngrabEvent() override { contact=-1;k2c_display_host_input(3,0,0); }
-    void mouseUngrabEvent() override { contact=-1;k2c_display_host_input(3,0,0); }
+    void touchUngrabEvent() override { if(!contacts.isEmpty())sendFrame(3,0,contacts);contacts.clear(); }
+    void mouseUngrabEvent() override { touchUngrabEvent(); }
 };
 
 struct ZipEntry { QString name; quint16 method; quint32 compressed; quint32 uncompressed; quint32 offset; quint32 crc; };

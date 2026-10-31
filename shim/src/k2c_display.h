@@ -17,8 +17,15 @@ void k2c_display_stage(const void *pixels, int width, int height, int stride_byt
 int  k2c_display_present_staged(void);
 int  k2c_display_screen_w(void);
 int  k2c_display_screen_h(void);
-// Single-contact Android actions: down=0, up=1, move=2, cancel=3.
-typedef struct { int action; float x, y; } K2CInput;
+// Батч-снимок касаний Android: action — маскированное действие
+// (down=0, up=1, move=2, cancel=3, pointer_down=5, pointer_up=6),
+// index — индекс изменившегося контакта, count — контактов в снимке.
+// Координаты в take_input — пиксели экрана; в host-функциях — доли 0..1.
+#include "jni_fake.h"
+typedef K2CMotionPoints K2CInput;
 int k2c_display_take_input(K2CInput *event);
+void k2c_display_host_input_frame(const K2CInput *frame);
+// Одиночное касание: down=0, up=1, move=2, cancel=3.
+void k2c_display_host_input(int action, float x, float y);
 
 #endif

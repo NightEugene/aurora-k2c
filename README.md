@@ -1,14 +1,14 @@
 # Kingdom: Two Crowns для ОС Аврора
 
 Лаунчер и слой совместимости для запуска Kingdom: Two Crowns на устройствах
-с ОС Аврора, aarch64. Версия лаунчера — **1.1.1**.
+с ОС Аврора, aarch64. Версия лаунчера — **1.1.2**.
 Поддерживается совместимый APK с Unity **6000.0.61f1**.
 
 ## Возможности
 
 - Выбор APK и автоматический запуск ранее выбранного файла.
 - Одно окно Qt Quick с альбомным изображением и обложкой приложения.
-- Сенсорное управление одним контактом.
+- Сенсорное управление, мультитач до 4 касаний.
 - Звук через AAudio → PulseAudio.
 - Вывод изображения через GLES-текстуру.
 - Настройки и сохранения в приватном хранилище приложения.
@@ -48,7 +48,7 @@ AURORA_BUILD_IMAGE=your-aurora-sdk-image:5.2.1.200 sh launcher/build-rpm.sh
 Результат:
 
 ```text
-launcher/build-rpm/RPMS/ru.nighteugene.k2clauncher-1.1.1-1.aarch64.rpm
+launcher/build-rpm/RPMS/ru.nighteugene.k2clauncher-1.1.2-1.aarch64.rpm
 ```
 
 Подготовка runtime проверяет SHA-256 исходного `libunity.so`:
@@ -61,8 +61,8 @@ launcher/build-rpm/RPMS/ru.nighteugene.k2clauncher-1.1.1-1.aarch64.rpm
 ## Установка
 
 ```sh
-scp launcher/build-rpm/RPMS/ru.nighteugene.k2clauncher-1.1.1-1.aarch64.rpm defaultuser@192.168.2.15:~/Downloads/
-ssh defaultuser@192.168.2.15 'sdk-deploy-rpm --silent --keepUserData ~/Downloads/ru.nighteugene.k2clauncher-1.1.1-1.aarch64.rpm'
+scp launcher/build-rpm/RPMS/ru.nighteugene.k2clauncher-1.1.2-1.aarch64.rpm defaultuser@192.168.2.15:~/Downloads/
+ssh defaultuser@192.168.2.15 'sdk-deploy-rpm --silent --keepUserData ~/Downloads/ru.nighteugene.k2clauncher-1.1.2-1.aarch64.rpm'
 ```
 
 Для сертификата SDK может потребоваться режим разработчика. Откройте

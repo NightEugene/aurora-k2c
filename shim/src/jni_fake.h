@@ -80,7 +80,17 @@ jobject fake_jni_array_get(jobject arr, jlong idx);
 // Создать фейковый jobject с именем (для Context/Surface и т.п.).
 jobject fake_jni_new_object(const char *name);
 jobject fake_jni_new_string(const char *s);
-jobject fake_jni_new_motion_event(int action, float x, float y, jlong time_ms, jlong down_ms);
+
+// Снимок касаний MotionEvent (координаты в пикселях экрана).
+#define K2C_MOTION_MAX_POINTERS 4
+typedef struct {
+    int action;   // маскированное действие: 0 down, 1 up, 2 move, 3 cancel, 5 ptr_down, 6 ptr_up
+    int index;    // индекс изменившегося контакта (для ptr_down/ptr_up)
+    int count;    // контактов в снимке (для ptr_up включая поднятый)
+    float x[K2C_MOTION_MAX_POINTERS], y[K2C_MOTION_MAX_POINTERS];
+    int id[K2C_MOTION_MAX_POINTERS];
+} K2CMotionPoints;
+jobject fake_jni_new_motion_event(const K2CMotionPoints *points, jlong time_ms, jlong down_ms);
 void fake_jni_release_motion_event(jobject event);
 
 // Получить имя фейковой ссылки (для логов).
